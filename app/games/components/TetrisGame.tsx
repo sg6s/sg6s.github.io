@@ -17,10 +17,10 @@ const SHAPES = [
 
 interface TetrisGameProps {
   playerName: string;
+  onGameEnd?: () => void; // 添加游戏结束回调
 }
 
 const saveScore = async (playerName: string, score: number) => {
-  console.info('score', playerName, score)
   if (!playerName) return
 
   try {
@@ -31,7 +31,8 @@ const saveScore = async (playerName: string, score: number) => {
       },
       body: JSON.stringify({
         playerName,
-        score
+        score,
+        gameType: 2 // 俄罗斯方块游戏类型
       }),
     })
 
@@ -44,14 +45,13 @@ const saveScore = async (playerName: string, score: number) => {
 }
 
 export default function TetrisGame(props: TetrisGameProps) {
-  console.info('input', props)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameLoopRef = useRef<NodeJS.Timeout | null>(null)
   const [score, setScore] = useState(0)
-  const [gameSpeed, setGameSpeed] = useState(500)
+  const [gameSpeed, setGameSpeed] = useState(1000)
   const [gameStarted, setGameStarted] = useState(false)
-
-
+  const [gameOver, setGameOver] = useState(false)
+  const [hasStartedOnce, setHasStartedOnce] = useState(false)
 
   const boardRef = useRef<number[][]>(Array(ROWS).fill(0).map(() => Array(COLS).fill(0)))
   const currentPieceRef = useRef({
@@ -126,6 +126,8 @@ export default function TetrisGame(props: TetrisGameProps) {
   }, [])
 
   const moveDown = useCallback(() => {
+    if (!gameStarted || gameOver) return
+
     const { shape, x, y } = currentPieceRef.current
     if (!checkCollision(x, y + 1, shape)) {
       currentPieceRef.current.y++
@@ -150,7 +152,14 @@ export default function TetrisGame(props: TetrisGameProps) {
         }
       }
       if (linesCleared > 0) {
-        setScore(prev => prev + linesCleared * 100)
+        // 新的得分逻辑：一次消除4行给500分，低于4行则消除一行给100分
+        let scoreToAdd = 0
+        if (linesCleared >= 4) {
+          scoreToAdd = 500
+        } else {
+          scoreToAdd = linesCleared * 100
+        }
+        setScore(prev => prev + scoreToAdd)
         setGameSpeed(prev => Math.max(100, prev - linesCleared * 50))
       }
 
@@ -161,28 +170,56 @@ export default function TetrisGame(props: TetrisGameProps) {
         y: 0
       }
 
-      // 检查游戏结束
-      if (checkCollision(currentPieceRef.current.x, currentPieceRef.current.y, currentPieceRef.current.shape)) {
-        if (props.playerName) {
-          saveScore(props.playerName, score)
-        }
-        setGameStarted(false)
-        setScore(0)
-        setGameSpeed(1000)
-        boardRef.current = Array(ROWS).fill(0).map(() => Array(COLS).fill(0))
-        currentPieceRef.current = {
-          shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
-          x: Math.floor(COLS / 2) - 1,
-          y: 0
-        }
-        drawBoard()
-        boardRef.current = Array(ROWS).fill(0).map(() => Array(COLS).fill(0))
-        setScore(0)
-        setGameSpeed(1000)
-      }
+             // 检查游戏结束
+       if (checkCollision(currentPieceRef.current.x, currentPieceRef.current.y, currentPieceRef.current.shape)) {
+         setGameOver(true)
+         saveScore(props.playerName, score)
+         setGameStarted(false)
+         // 通知父组件游戏结束，更新排行榜
+         if (props.onGameEnd) {
+           props.onGameEnd()
+         }
+       }
     }
     drawBoard()
-  }, [score,checkCollision, drawBoard])
+  }, [gameStarted, gameOver, checkCollision, drawBoard, props.playerName, score])
+
+  const startGame = useCallback(() => {
+    setGameStarted(true)
+    setGameOver(false)
+    setHasStartedOnce(true)
+    setScore(0)
+    setGameSpeed(1000)
+    boardRef.current = Array(ROWS).fill(0).map(() => Array(COLS).fill(0))
+    currentPieceRef.current = {
+      shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
+      x: Math.floor(COLS / 2) - 1,
+      y: 0
+    }
+    drawBoard()
+  }, [drawBoard])
+
+  const pauseGame = useCallback(() => {
+    setGameStarted(false)
+  }, [])
+
+  const continueGame = useCallback(() => {
+    setGameStarted(true)
+  }, [])
+
+  const resetGame = useCallback(() => {
+    setGameStarted(true) // 直接开始游戏
+    setGameOver(false)
+    setScore(0)
+    setGameSpeed(1000)
+    boardRef.current = Array(ROWS).fill(0).map(() => Array(COLS).fill(0))
+    currentPieceRef.current = {
+      shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
+      x: Math.floor(COLS / 2) - 1,
+      y: 0
+    }
+    drawBoard()
+  }, [drawBoard])
 
   // 初始化游戏和事件监听
   useEffect(() => {
@@ -206,37 +243,69 @@ export default function TetrisGame(props: TetrisGameProps) {
       const { shape, x, y } = currentPieceRef.current
       switch (e.key) {
         case 'ArrowLeft':
-          if (!checkCollision(x - 1, y, shape)) currentPieceRef.current.x--
+          if (gameStarted && !gameOver && !checkCollision(x - 1, y, shape)) {
+            currentPieceRef.current.x--
+            drawBoard()
+          }
           break
         case 'ArrowRight':
-          if (!checkCollision(x + 1, y, shape)) currentPieceRef.current.x++
+          if (gameStarted && !gameOver && !checkCollision(x + 1, y, shape)) {
+            currentPieceRef.current.x++
+            drawBoard()
+          }
           break
         case 'ArrowDown':
-          moveDown()
+          if (gameStarted && !gameOver) {
+            moveDown()
+          }
           break
         case 'ArrowUp':
-          const newShape = shape[0].map((_, i) =>
-            shape.map(row => row[i]).reverse()
-          )
-          if (!checkCollision(x, y, newShape)) {
-            currentPieceRef.current.shape = newShape
+          if (gameStarted && !gameOver) {
+            const newShape = shape[0].map((_, i) =>
+              shape.map(row => row[i]).reverse()
+            )
+            if (!checkCollision(x, y, newShape)) {
+              currentPieceRef.current.shape = newShape
+              drawBoard()
+            }
+          }
+          break
+        case ' ':
+          e.preventDefault()
+          if (gameOver) {
+            resetGame()
+          } else if (!gameStarted && !hasStartedOnce) {
+            startGame()
+          } else if (!gameStarted && hasStartedOnce) {
+            continueGame()
+          } else if (gameStarted) {
+            pauseGame()
           }
           break
       }
-      drawBoard()
     }
 
     window.addEventListener('keydown', handleKeyDown)
 
     // 游戏主循环
-    gameLoopRef.current = setInterval(moveDown, gameSpeed)
+    if (gameStarted && !gameOver) {
+      gameLoopRef.current = setInterval(moveDown, gameSpeed)
+    }
 
     return () => {
       window.removeEventListener('resize', updateCanvasSize)
       window.removeEventListener('keydown', handleKeyDown)
       if (gameLoopRef.current) clearInterval(gameLoopRef.current)
     }
-  }, [moveDown, gameSpeed, drawBoard, checkCollision])
+  }, [moveDown, gameSpeed, drawBoard, checkCollision, gameStarted, gameOver, startGame, pauseGame, continueGame, resetGame])
+
+  // 更新游戏循环速度
+  useEffect(() => {
+    if (gameStarted && !gameOver) {
+      if (gameLoopRef.current) clearInterval(gameLoopRef.current)
+      gameLoopRef.current = setInterval(moveDown, gameSpeed)
+    }
+  }, [gameSpeed, gameStarted, gameOver, moveDown])
 
   return (
     <div className="max-w-md mx-auto bg-white p-6 rounded-lg shadow-md flex flex-col" style={{ height: 'calc(100vh - 180px)' }}>
@@ -246,6 +315,48 @@ export default function TetrisGame(props: TetrisGameProps) {
         <span className="font-semibold text-gray-800">玩家: {props.playerName}</span>
         <span className="font-semibold text-gray-800">分数: {score}</span>
       </div>
+
+      {gameOver && (
+        <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-center">
+          游戏结束！最终分数: {score}
+        </div>
+      )}
+
+             <div className="flex justify-center gap-2 mb-4">
+         {!gameStarted && !gameOver && !hasStartedOnce && (
+           <button
+             onClick={startGame}
+             className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+           >
+             开始游戏
+           </button>
+         )}
+         {!gameStarted && !gameOver && hasStartedOnce && (
+           <button
+             onClick={continueGame}
+             className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+           >
+             继续游戏
+           </button>
+         )}
+         {gameStarted && !gameOver && (
+           <button
+             onClick={pauseGame}
+             className="px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+           >
+             暂停
+           </button>
+         )}
+         {gameOver && (
+           <button
+             onClick={resetGame}
+             className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+           >
+             重新开始
+           </button>
+         )}
+       </div>
+
       <div id="play-pannel" className="flex-1 w-full min-h-[400px]">
         <div className="h-full flex items-center justify-center">
           <canvas
@@ -255,8 +366,10 @@ export default function TetrisGame(props: TetrisGameProps) {
           />
         </div>
       </div>
+      
       <p className="mt-4 text-gray-800">
-        使用方向键控制: ↑旋转 ←→移动 ↓加速下落
+        使用方向键控制: ↑旋转 ←→移动 ↓加速下落<br/>
+        空格键: {gameOver ? '重新开始' : !gameStarted && !hasStartedOnce ? '开始游戏' : !gameStarted && hasStartedOnce ? '继续游戏' : '暂停'}
       </p>
     </div>
   )
